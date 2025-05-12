@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search API Client Example</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, 
+                   Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .search-form {
+      display: flex;
+      margin-bottom: 20px;
+    }
+    .search-input {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px 0 0 4px;
+    }
+    .search-button {
+      padding: 10px 20px;
+      background-color: #0070f3;
+      color: white;
+      border: none;
+      border-radius: 0 4px 4px 0;
+      cursor: pointer;
+    }
+    .results {
+      margin-top: 20px;
+    }
+    .result-section {
+      border: 1px solid #eaeaea;
+      border-radius: 4px;
+      padding: 15px;
+      margin-bottom: 20px;
+    }
+    .result-section h2 {
+      margin-top: 0;
+      border-bottom: 1px solid #eaeaea;
+      padding-bottom: 10px;
+    }
+    .result-item {
+      margin-bottom: 15px;
+      padding-bottom: 15px;
+      border-bottom: 1px solid #eaeaea;
+    }
+    .result-item:last-child {
+      border-bottom: none;
+    }
+    .result-title {
+      margin: 0 0 5px 0;
+    }
+    .result-title a {
+      color: #1a0dab;
+      text-decoration: none;
+    }
+    .result-title a:hover {
+      text-decoration: underline;
+    }
+    .loading {
+      text-align: center;
+      font-style: italic;
+      color: #666;
+    }
+    .error {
+      color: #d32f2f;
+      padding: 10px;
+      border: 1px solid #d32f2f;
+      border-radius: 4px;
+    }
+    .screenshot {
+      max-width: 100%;
+      margin-top: 15px;
+      border: 1px solid #eaeaea;
+      border-radius: 4px;
+    }
+    .api-url-input {
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 20px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .options-container {
+      margin: 20px 0;
+      padding: 15px;
+      border: 1px solid #eaeaea;
+      border-radius: 4px;
+      background-color: #f9f9f9;
+    }
+    .option {
+      margin-bottom: 10px;
+    }
+    .option:last-child {
+      margin-bottom: 0;
+    }
+    .option-hint {
+      color: #666;
+      font-size: 0.8rem;
+      margin-left: 5px;
+    }
+    select {
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Search API Client Example</h1>
+  
+  <p>This example demonstrates how to consume the Search API from another website.</p>
+  
+  <div>
+    <label for="api-url">API Base URL:</label>
+    <input type="text" id="api-url" class="api-url-input" placeholder="https://yoursite.vercel.app" 
+           value="http://localhost:3000">
+  </div>
+  
+  <form id="search-form" class="search-form">
+    <input type="text" id="query" class="search-input" placeholder="Enter search term...">
+    <button type="submit" class="search-button">Search</button>
+  </form>
+  
+  <div class="options-container">
+    <div class="option">
+      <label for="include-screenshots">
+        <input type="checkbox" id="include-screenshots" checked> Include screenshots
+      </label>
+      <span class="option-hint">(Disable to reduce data usage)</span>
+    </div>
+    <div class="option">
+      <label for="max-results">Max results per engine:</label>
+      <select id="max-results">
+        <option value="">All results</option>
+        <option value="3">3 results</option>
+        <option value="5">5 results</option>
+        <option value="10">10 results</option>
+      </select>
+    </div>
+  </div>
+  
+  <div id="loading" class="loading" style="display: none;">Searching...</div>
+  <div id="error" class="error" style="display: none;"></div>
+  
+  <div id="results" class="results" style="display: none;">
+    <div id="google-results" class="result-section">
+      <h2>Google Results</h2>
+      <div id="google-items"></div>
+      <div id="google-screenshot-container">
+        <h3>Screenshot</h3>
+        <img id="google-screenshot" class="screenshot" alt="Google search results">
+      </div>
+    </div>
+    
+    <div id="baidu-results" class="result-section">
+      <h2>Baidu Results</h2>
+      <div id="baidu-items"></div>
+      <div id="baidu-screenshot-container">
+        <h3>Screenshot</h3>
+        <img id="baidu-screenshot" class="screenshot" alt="Baidu search results">
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const searchForm = document.getElementById('search-form');
+      const queryInput = document.getElementById('query');
+      const apiUrlInput = document.getElementById('api-url');
+      const loadingEl = document.getElementById('loading');
+      const errorEl = document.getElementById('error');
+      const resultsEl = document.getElementById('results');
+      const googleItemsEl = document.getElementById('google-items');
+      const baiduItemsEl = document.getElementById('baidu-items');
+      const googleScreenshotEl = document.getElementById('google-screenshot');
+      const baiduScreenshotEl = document.getElementById('baidu-screenshot');
+      const includeScreenshotsEl = document.getElementById('include-screenshots');
+      const maxResultsEl = document.getElementById('max-results');
+      
+      searchForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const query = queryInput.value.trim();
+        const apiBaseUrl = apiUrlInput.value.trim();
+        const includeScreenshots = includeScreenshotsEl.checked;
+        const maxResults = maxResultsEl.value;
+        
+        if (!query) {
+          showError('Please enter a search term');
+          return;
+        }
+        
+        if (!apiBaseUrl) {
+          showError('Please enter the API base URL');
+          return;
+        }
+        
+        // Show loading, hide results and error
+        loadingEl.style.display = 'block';
+        resultsEl.style.display = 'none';
+        errorEl.style.display = 'none';
+        
+        try {
+          // Build the API URL with all parameters
+          let apiUrl = `${apiBaseUrl}/api/search?query=${encodeURIComponent(query)}&includeScreenshots=${includeScreenshots}`;
+          
+          // Add maxResults parameter if selected
+          if (maxResults) {
+            apiUrl += `&maxResults=${maxResults}`;
+          }
+          
+          const response = await fetch(apiUrl);
+          
+          if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
+          }
+          
+          const data = await response.json();
+          
+          // Display results
+          displayResults(data, includeScreenshots);
+          
+          // Hide loading, show results
+          loadingEl.style.display = 'none';
+          resultsEl.style.display = 'block';
+        } catch (error) {
+          console.error('Error fetching search results:', error);
+          showError(`Error: ${error.message}`);
+          loadingEl.style.display = 'none';
+        }
+      });
+      
+      function displayResults(data, showImages) {
+        // Clear previous results
+        googleItemsEl.innerHTML = '';
+        baiduItemsEl.innerHTML = '';
+        
+        // Display Google results
+        if (data.google && data.google.data && data.google.data.length > 0) {
+          data.google.data.forEach(item => {
+            const resultEl = createResultElement(item);
+            googleItemsEl.appendChild(resultEl);
+          });
+          
+          // Display Google screenshot if available and enabled
+          if (showImages && data.google.image) {
+            googleScreenshotEl.src = data.google.image;
+            document.getElementById('google-screenshot-container').style.display = 'block';
+          } else {
+            document.getElementById('google-screenshot-container').style.display = 'none';
+          }
+        } else {
+          googleItemsEl.innerHTML = '<p>No Google results found</p>';
+          document.getElementById('google-screenshot-container').style.display = 'none';
+        }
+        
+        // Display Baidu results
+        if (data.baidu && data.baidu.data && data.baidu.data.length > 0) {
+          data.baidu.data.forEach(item => {
+            const resultEl = createResultElement(item);
+            baiduItemsEl.appendChild(resultEl);
+          });
+          
+          // Display Baidu screenshot if available and enabled
+          if (showImages && data.baidu.image) {
+            baiduScreenshotEl.src = data.baidu.image;
+            document.getElementById('baidu-screenshot-container').style.display = 'block';
+          } else {
+            document.getElementById('baidu-screenshot-container').style.display = 'none';
+          }
+        } else {
+          baiduItemsEl.innerHTML = '<p>No Baidu results found</p>';
+          document.getElementById('baidu-screenshot-container').style.display = 'none';
+        }
+      }
+      
+      function createResultElement(item) {
+        const resultEl = document.createElement('div');
+        resultEl.className = 'result-item';
+        
+        const titleEl = document.createElement('h3');
+        titleEl.className = 'result-title';
+        
+        const linkEl = document.createElement('a');
+        linkEl.href = item.link;
+        linkEl.target = '_blank';
+        linkEl.textContent = item.title;
+        
+        titleEl.appendChild(linkEl);
+        resultEl.appendChild(titleEl);
+        
+        if (item.content) {
+          const contentEl = document.createElement('p');
+          contentEl.textContent = item.content;
+          resultEl.appendChild(contentEl);
+        }
+        
+        return resultEl;
+      }
+      
+      function showError(message) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+        loadingEl.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html> 
