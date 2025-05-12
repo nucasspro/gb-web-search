@@ -1,7 +1,17 @@
-// /utils/crawler.js
-// Search engine crawling functions
-
+// Server-only crawler implementation
 import puppeteer from 'puppeteer';
+let chromium;
+
+try {
+  // This import might fail in some environments
+  chromium = require('@sparticuz/chromium');
+} catch (error) {
+  console.log('Chromium import failed, will use default puppeteer browser');
+  chromium = null;
+}
+
+// Determine if running in serverless environment
+const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
 
 /**
  * Enhanced stealth setup to avoid bot detection
@@ -137,10 +147,6 @@ async function setupStealth(page) {
 
 /**
  * Compresses and resizes a base64 image to reduce file size
- * @param {string} base64Image - Original base64 image
- * @param {number} quality - Image quality (1-100)
- * @param {number} maxWidth - Maximum width of the image
- * @returns {Promise<string>} Compressed base64 image
  */
 async function compressScreenshot(page, options = {}) {
   const {
@@ -175,9 +181,54 @@ async function compressScreenshot(page, options = {}) {
 }
 
 /**
+ * Adds a random delay between actions to mimic human behavior
+ */
+async function randomDelay(min, max) {
+  const delay = Math.floor(Math.random() * (max - min) + min);
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
+
+/**
+ * Types text with random speed to mimic human typing
+ */
+async function typeWithRandomSpeed(page, selector, text) {
+  await page.focus(selector);
+  
+  for (const char of text) {
+    await page.type(selector, char, { delay: Math.floor(Math.random() * 100) + 30 });
+    await randomDelay(10, 100);
+  }
+}
+
+/**
+ * Auto-scroll function to scroll down the page to ensure all content is loaded
+ */
+async function autoScroll(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => {
+      let totalHeight = 0;
+      const distance = 100;
+      const timer = setInterval(() => {
+        const scrollHeight = document.body.scrollHeight;
+        window.scrollBy(0, distance);
+        totalHeight += distance;
+
+        if (totalHeight >= scrollHeight - window.innerHeight) {
+          clearInterval(timer);
+          // Scroll back to top before taking screenshot
+          window.scrollTo(0, 0);
+          resolve();
+        }
+      }, 100);
+    });
+  });
+  
+  // Wait a bit after scrolling to ensure everything is loaded
+  await randomDelay(1000, 2000);
+}
+
+/**
  * Crawls Google search results for the given query
- * @param {string} query - Search query
- * @returns {Promise<Object>} Search results and screenshot
  */
 export async function crawlGoogle(query) {
   let browser = null;
@@ -186,9 +237,9 @@ export async function crawlGoogle(query) {
   try {
     console.log(`Crawling Google for: "${query}"`);
     
-    // Launch browser with optimized options
-    browser = await puppeteer.launch({
-      headless: 'new', // Use the new headless mode
+    // Common browser options
+    const browserOptions = {
+      headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox', 
@@ -218,7 +269,24 @@ export async function crawlGoogle(query) {
         width: 1280,
         height: 800
       }
-    });
+    };
+    
+    // Launch browser with environment-specific options
+    if (isServerless && chromium) {
+      console.log('Using serverless browser configuration');
+      try {
+        browserOptions.executablePath = await chromium.executablePath();
+        // In serverless environment, we need to use true headless
+        browserOptions.headless = true;
+        // Reduce memory usage for serverless
+        browserOptions.defaultViewport.width = 1024;
+        browserOptions.defaultViewport.height = 768;
+      } catch (error) {
+        console.log('Error configuring serverless browser:', error.message);
+      }
+    }
+    
+    browser = await puppeteer.launch(browserOptions);
     
     const context = await browser.createIncognitoBrowserContext();
     const page = await context.newPage();
@@ -228,7 +296,7 @@ export async function crawlGoogle(query) {
     // Random delay before navigating to mimic human behavior
     await randomDelay(1000, 3000);
     
-    // First navigate to Google homepage
+    // Navigate to Google homepage
     await page.goto('https://www.google.com', {
       waitUntil: 'networkidle2',
       timeout: 30000
@@ -237,7 +305,7 @@ export async function crawlGoogle(query) {
     // Add random delay to mimic human behavior
     await randomDelay(1000, 2000);
     
-    // Check if search input exists (could be input or textarea depending on Google version)
+    // Check if search input exists
     const inputExists = await page.evaluate(() => {
       const inputSearch = document.querySelector('input[name="q"]');
       const textareaSearch = document.querySelector('textarea[name="q"]');
@@ -252,7 +320,7 @@ export async function crawlGoogle(query) {
       throw new Error('Google search input not found');
     }
     
-    // Add small delay before typing to mimic human behavior
+    // Add small delay before typing
     await randomDelay(500, 1500);
     
     // Type the search query with random typing speed
@@ -262,7 +330,7 @@ export async function crawlGoogle(query) {
       await typeWithRandomSpeed(page, 'input[name="q"]', query);
     }
     
-    // Small delay before pressing Enter (like a human would)
+    // Small delay before pressing Enter
     await randomDelay(300, 800);
     
     await page.keyboard.press('Enter');
@@ -321,13 +389,13 @@ export async function crawlGoogle(query) {
       console.log('Google results selector timeout - continuing anyway');
     }
     
-    // Extract search results with a more comprehensive approach
+    // Extract search results
     const results = await page.evaluate(() => {
       console.log('Evaluating Google search results');
       
       const searchResults = [];
       
-      // Similar to the C# code, start with cite tags
+      // Start with cite tags
       const citeElements = document.querySelectorAll('cite');
       
       citeElements.forEach(citeElement => {
@@ -339,7 +407,7 @@ export async function crawlGoogle(query) {
           // Get the link from the parent (usually an 'a' tag)
           const link = parentNode.getAttribute('href') || parentNode.querySelector('a')?.href || '';
           
-          // Find the h3 tag (similar to C# code)
+          // Find the h3 tag
           const h3Node = parentNode.querySelector('h3');
           if (!h3Node) return;
           
@@ -347,7 +415,7 @@ export async function crawlGoogle(query) {
           const title = h3Node.innerText.trim();
           if (!title) return;
           
-          // Go up to find the content container (similar to 8 levels up in C# code)
+          // Go up to find the content container
           let contentContainer = parentNode;
           for (let i = 0; i < 6; i++) {
             contentContainer = contentContainer.parentElement;
@@ -358,7 +426,7 @@ export async function crawlGoogle(query) {
           const spans = contentContainer?.querySelectorAll('span:not([class])') || [];
           let content = '';
           
-          // Get the last span content as description (similar to C#)
+          // Get the last span content as description
           if (spans.length > 0) {
             content = spans[spans.length - 1].innerText.trim();
           } else {
@@ -407,56 +475,7 @@ export async function crawlGoogle(query) {
 }
 
 /**
- * Adds a random delay between actions to mimic human behavior
- */
-async function randomDelay(min, max) {
-  const delay = Math.floor(Math.random() * (max - min) + min);
-  return new Promise(resolve => setTimeout(resolve, delay));
-}
-
-/**
- * Types text with random speed to mimic human typing
- */
-async function typeWithRandomSpeed(page, selector, text) {
-  await page.focus(selector);
-  
-  for (const char of text) {
-    await page.type(selector, char, { delay: Math.floor(Math.random() * 100) + 30 });
-    await randomDelay(10, 100);
-  }
-}
-
-/**
- * Auto-scroll function to scroll down the page to ensure all content is loaded
- */
-async function autoScroll(page) {
-  await page.evaluate(async () => {
-    await new Promise((resolve) => {
-      let totalHeight = 0;
-      const distance = 100;
-      const timer = setInterval(() => {
-        const scrollHeight = document.body.scrollHeight;
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-
-        if (totalHeight >= scrollHeight - window.innerHeight) {
-          clearInterval(timer);
-          // Scroll back to top before taking screenshot
-          window.scrollTo(0, 0);
-          resolve();
-        }
-      }, 100);
-    });
-  });
-  
-  // Wait a bit after scrolling to ensure everything is loaded
-  await randomDelay(1000, 2000);
-}
-
-/**
  * Crawls Baidu search results for the given query
- * @param {string} query - Search query
- * @returns {Promise<Object>} Search results and screenshot
  */
 export async function crawlBaidu(query) {
   let browser = null;
@@ -465,9 +484,9 @@ export async function crawlBaidu(query) {
   try {
     console.log(`Crawling Baidu for: "${query}"`);
     
-    // Launch browser with bundled Chromium
-    browser = await puppeteer.launch({
-      headless: 'new', // Use the new headless mode
+    // Common browser options
+    const browserOptions = {
+      headless: 'new',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox', 
@@ -497,7 +516,24 @@ export async function crawlBaidu(query) {
         width: 1280,
         height: 800
       }
-    });
+    };
+    
+    // Launch browser with environment-specific options
+    if (isServerless && chromium) {
+      console.log('Using serverless browser configuration');
+      try {
+        browserOptions.executablePath = await chromium.executablePath();
+        // In serverless environment, we need to use true headless
+        browserOptions.headless = true;
+        // Reduce memory usage for serverless
+        browserOptions.defaultViewport.width = 1024;
+        browserOptions.defaultViewport.height = 768;
+      } catch (error) {
+        console.log('Error configuring serverless browser:', error.message);
+      }
+    }
+    
+    browser = await puppeteer.launch(browserOptions);
     
     const context = await browser.createIncognitoBrowserContext();
     const page = await context.newPage();

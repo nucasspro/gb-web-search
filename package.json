@@ -4,25 +4,26 @@
     "description": "API that crawls Google and Baidu search results",
     "private": true,
     "scripts": {
-      "dev": "next dev",
-      "build": "next build",
-      "start": "next start",
-      "lint": "next lint",
-      "deploy": "node deploy.js",
-      "deploy:prod": "node deploy.js --prod"
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start",
+        "lint": "next lint",
+        "deploy": "node deploy.js",
+        "deploy:prod": "node deploy.js --prod"
     },
     "dependencies": {
-      "next": "^12.3.4",
-      "puppeteer": "^19.7.5",
-      "puppeteer-core": "^10.1.0",
-      "@sparticuz/chromium": "^113.0.1",
-      "chrome-aws-lambda": "^10.1.0"
+        "@sparticuz/chromium": "^113.0.1",
+        "chrome-aws-lambda": "^10.1.0",
+        "next": "^12.3.4",
+        "puppeteer": "^19.7.5",
+        "puppeteer-core": "^10.1.0"
     },
     "devDependencies": {
-      "eslint": "^8.44.0",
-      "eslint-config-next": "^12.3.4"
+        "eslint": "^8.44.0",
+        "eslint-config-next": "^12.3.4",
+        "null-loader": "^4.0.1"
     },
     "engines": {
-      "node": ">=14.x"
+        "node": ">=14.x"
     }
-  } 
+}

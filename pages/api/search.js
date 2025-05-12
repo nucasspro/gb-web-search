@@ -1,97 +1,89 @@
-import { crawlGoogle, crawlBaidu } from '../utils/crawler';
+// Search API route
+import { searchGoogle, searchBaidu } from '../../app/api/server-action';
 
-// Helper function to enable CORS
-function setCORSHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-}
+// Set a reasonable timeout for the API
+const TIMEOUT = 60 * 1000; // 60 seconds
+
+// Configure API options
+export const config = {
+  api: {
+    // Disable the default body parser to handle larger screenshot data
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+    // Set a longer timeout for serverless functions
+    externalResolver: true,
+  },
+};
 
 export default async function handler(req, res) {
-  // Handle preflight OPTIONS request
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  // Handle OPTIONS request for CORS preflight
   if (req.method === 'OPTIONS') {
-    setCORSHeaders(res);
-    return res.status(200).end();
+    res.status(200).end();
+    return;
   }
   
+  // Only allow GET and POST requests
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
   try {
-    // Only allow GET requests
-    if (req.method !== 'GET') {
-      return res.status(405).json({ 
-        error: 'Method not allowed',
-        message: 'Only GET requests are supported'
-      });
+    // Set timeout for the request
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Request timeout')), TIMEOUT)
+    );
+
+    // Get search parameters
+    const { query, engine = 'google' } = req.method === 'GET' 
+      ? req.query 
+      : req.body;
+
+    // Validate query
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: 'Invalid or missing query parameter' });
+      return;
     }
 
-    // Set CORS headers for all responses
-    setCORSHeaders(res);
+    // Execute the search with timeout
+    const searchPromise = engine.toLowerCase() === 'baidu' 
+      ? searchBaidu(query)
+      : searchGoogle(query);
 
-    // Get search query from request
-    const { query, includeScreenshots = 'true', maxResults } = req.query;
-    
-    if (!query) {
-      return res.status(400).json({ 
-        error: 'Bad Request',
-        message: 'Search query parameter is required'
-      });
-    }
+    // Race between search and timeout
+    const result = await Promise.race([searchPromise, timeoutPromise]);
 
-    // Convert string parameters to appropriate types
-    const shouldIncludeScreenshots = includeScreenshots.toLowerCase() === 'true';
-    const resultsLimit = maxResults ? parseInt(maxResults, 10) : undefined;
-
-    console.log(`Processing search request for: "${query}" (Include screenshots: ${shouldIncludeScreenshots})`);
-
-    // Crawl both search engines in parallel
-    const [googleResults, baiduResults] = await Promise.all([
-      crawlGoogle(query),
-      crawlBaidu(query)
-    ]);
-
-    // Limit the number of results if specified
-    let googleData = googleResults.results || [];
-    let baiduData = baiduResults.results || [];
-    
-    if (resultsLimit && !isNaN(resultsLimit) && resultsLimit > 0) {
-      googleData = googleData.slice(0, resultsLimit);
-      baiduData = baiduData.slice(0, resultsLimit);
-    }
-
-    // Format the results according to the required structure
-    const formattedResponse = {
-      // Include timestamp for tracking
-      timestamp: new Date().toISOString(),
-      // Format Google results
-      google: {
-        data: googleData.map(item => ({
-          title: item.title || '',
-          link: item.url || '',
-          content: item.description || ''
+    // Return search results with proper structure
+    res.status(200).json({
+      success: !result.error,
+      data: {
+        query,
+        engine: engine.toLowerCase(),
+        results: result.results.map(item => ({
+          title: item.title,
+          url: item.url,
+          description: item.description,
         })),
-        image: shouldIncludeScreenshots ? (googleResults.screenshot || '') : '',
-        highlight: [] // Empty highlight list as specified
+        image: result.screenshot,
       },
-      // Format Baidu results
-      baidu: {
-        data: baiduData.map(item => ({
-          title: item.title || '',
-          link: item.url || '',
-          content: item.description || ''
-        })),
-        image: shouldIncludeScreenshots ? (baiduResults.screenshot || '') : '',
-        highlight: [] // Empty highlight list as specified
-      }
-    };
-
-    // Return the combined results
-    return res.status(200).json(formattedResponse);
+      error: result.error,
+    });
   } catch (error) {
-    console.error('Error in search API:', error);
-    // Set CORS headers even for error responses
-    setCORSHeaders(res);
-    return res.status(500).json({ 
-      error: 'Internal Server Error',
-      message: error.message
+    console.error('API error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      data: null
     });
   }
 } 
