@@ -1,5 +1,5 @@
 // Server-only crawler implementation
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
 let chromium;
 
 try {
@@ -228,6 +228,28 @@ async function autoScroll(page) {
 }
 
 /**
+ * Function to create mock search results when browser launch fails
+ */
+function createMockSearchResults(query) {
+  return {
+    results: [
+      {
+        title: "Search Results for: " + query,
+        url: "https://example.com/search?q=" + encodeURIComponent(query),
+        description: "This is a mock search result because the browser could not be launched in the serverless environment."
+      },
+      {
+        title: "Unable to crawl live results",
+        url: "https://example.com/error",
+        description: "Serverless environment restrictions prevent launching Chrome. Consider using a hosted solution with proper dependencies."
+      }
+    ],
+    screenshot: null,
+    error: "Browser could not be launched in serverless environment. Using mock results instead."
+  };
+}
+
+/**
  * Crawls Google search results for the given query
  */
 export async function crawlGoogle(query) {
@@ -237,10 +259,16 @@ export async function crawlGoogle(query) {
   try {
     console.log(`Crawling Google for: "${query}"`);
     
+    // Skip browser launch in serverless environment if we're in Vercel
+    if (process.env.VERCEL) {
+      console.log('Running in Vercel environment - returning mock results');
+      return createMockSearchResults(query);
+    }
+    
     // Common browser options
     const browserOptions = {
-      headless: 'new',
-      args: [
+      headless: true, // Use regular headless mode instead of 'new'
+      args: chromium ? chromium.args : [
         '--no-sandbox',
         '--disable-setuid-sandbox', 
         '--disable-dev-shm-usage',
@@ -262,12 +290,12 @@ export async function crawlGoogle(query) {
         '--enable-features=NetworkService,NetworkServiceInProcess',
         '--force-color-profile=srgb',
         '--metrics-recording-only',
-        '--window-size=1280,800'
+        '--window-size=1024,768'
       ],
       ignoreHTTPSErrors: true,
       defaultViewport: {
-        width: 1280,
-        height: 800
+        width: 1024,
+        height: 768
       }
     };
     
@@ -276,197 +304,85 @@ export async function crawlGoogle(query) {
       console.log('Using serverless browser configuration');
       try {
         browserOptions.executablePath = await chromium.executablePath();
-        // In serverless environment, we need to use true headless
-        browserOptions.headless = true;
-        // Reduce memory usage for serverless
-        browserOptions.defaultViewport.width = 1024;
-        browserOptions.defaultViewport.height = 768;
       } catch (error) {
         console.log('Error configuring serverless browser:', error.message);
+        return createMockSearchResults(query);
       }
     }
     
-    browser = await puppeteer.launch(browserOptions);
+    // Attempt to launch browser
+    try {
+      browser = await puppeteer.launch(browserOptions);
+    } catch (error) {
+      console.error('Failed to launch browser:', error.message);
+      return createMockSearchResults(query);
+    }
     
-    const context = await browser.createIncognitoBrowserContext();
-    const page = await context.newPage();
-    
+    const page = await browser.newPage();
     await setupStealth(page);
     
-    // Random delay before navigating to mimic human behavior
-    await randomDelay(1000, 3000);
-    
-    // Navigate to Google homepage
-    await page.goto('https://www.google.com', {
+    // Navigate directly to Google search results to avoid homepage
+    await page.goto(`https://www.google.com/search?q=${encodeURIComponent(query)}`, {
       waitUntil: 'networkidle2',
-      timeout: 30000
+      timeout: 15000 // Shorter timeout for serverless
     });
     
-    // Add random delay to mimic human behavior
-    await randomDelay(1000, 2000);
-    
-    // Check if search input exists
-    const inputExists = await page.evaluate(() => {
-      const inputSearch = document.querySelector('input[name="q"]');
-      const textareaSearch = document.querySelector('textarea[name="q"]');
-      return { 
-        hasInput: !!inputSearch, 
-        hasTextarea: !!textareaSearch
-      };
-    });
-    
-    if (!inputExists.hasInput && !inputExists.hasTextarea) {
-      console.log('Google search input not found. There might be a CAPTCHA or other issue.');
-      throw new Error('Google search input not found');
-    }
-    
-    // Add small delay before typing
-    await randomDelay(500, 1500);
-    
-    // Type the search query with random typing speed
-    if (inputExists.hasTextarea) {
-      await typeWithRandomSpeed(page, 'textarea[name="q"]', query);
-    } else {
-      await typeWithRandomSpeed(page, 'input[name="q"]', query);
-    }
-    
-    // Small delay before pressing Enter
-    await randomDelay(300, 800);
-    
-    await page.keyboard.press('Enter');
-    
-    // Wait for navigation to complete
-    await page.waitForNavigation({ waitUntil: 'networkidle2' });
-    
-    // Add explicit delay to let the page fully render
-    await randomDelay(2000, 3000);
-    
-    // Check if CAPTCHA appears
-    const captchaExists = await page.evaluate(() => {
-      return document.body.innerText.includes('CAPTCHA') || 
-             document.body.innerText.includes('unusual traffic') ||
-             document.querySelector('#recaptcha') !== null;
-    });
-    
-    if (captchaExists) {
-      console.log('CAPTCHA detected on Google, waiting for user to solve it...');
-      await page.waitForTimeout(60000); // 60 seconds to solve CAPTCHA
-      
-      // Check if we're past the CAPTCHA
-      const stillOnCaptcha = await page.evaluate(() => {
-        return document.body.innerText.includes('CAPTCHA') || 
-               document.body.innerText.includes('unusual traffic') ||
-               document.querySelector('#recaptcha') !== null;
-      });
-      
-      if (stillOnCaptcha) {
-        throw new Error('CAPTCHA not solved. Please try running the search manually.');
-      }
-    }
-    
-    // Scroll down the page to load more results and capture more content
-    await autoScroll(page);
-    
-    // Take a compressed screenshot
-    screenshotBase64 = await compressScreenshot(page, {
-      quality: 40,
-      maxWidth: 1024,
-      format: 'jpeg'
-    });
-    
-    console.log("Google screenshot captured (compressed image)");
-    
-    // Wait for search results to load - using multiple possible selectors
-    try {
-      await Promise.race([
-        page.waitForSelector('div.g', { timeout: 5000 }),
-        page.waitForSelector('[data-sokoban-grid]', { timeout: 5000 }),
-        page.waitForSelector('.main', { timeout: 5000 }),
-        page.waitForSelector('h3', { timeout: 5000 }),
-        page.waitForSelector('a[ping]', { timeout: 5000 })
-      ]);
-    } catch (error) {
-      console.log('Google results selector timeout - continuing anyway');
-    }
-    
-    // Extract search results
+    // Simplified result extraction that's more resilient
     const results = await page.evaluate(() => {
-      console.log('Evaluating Google search results');
-      
       const searchResults = [];
       
-      // Start with cite tags
-      const citeElements = document.querySelectorAll('cite');
+      // Look for any h3 elements which are usually titles
+      const titles = document.querySelectorAll('h3');
       
-      citeElements.forEach(citeElement => {
-        try {
-          // Find the parent that contains the link (4 levels up from cite)
-          const parentNode = citeElement.parentElement?.parentElement?.parentElement?.parentElement?.parentElement;
-          if (!parentNode) return;
+      titles.forEach(titleElement => {
+        // Find the closest anchor tag
+        const linkElement = titleElement.closest('a');
+        if (!linkElement) return;
+        
+        const title = titleElement.innerText.trim();
+        const url = linkElement.href;
+        
+        // Find a description - look for nearby text
+        let description = '';
+        let descElement = titleElement.parentElement;
+        
+        // Try to find description by looking at siblings or parent siblings
+        for (let i = 0; i < 3; i++) {
+          if (!descElement) break;
+          descElement = descElement.parentElement;
           
-          // Get the link from the parent (usually an 'a' tag)
-          const link = parentNode.getAttribute('href') || parentNode.querySelector('a')?.href || '';
-          
-          // Find the h3 tag
-          const h3Node = parentNode.querySelector('h3');
-          if (!h3Node) return;
-          
-          // Get the title from h3
-          const title = h3Node.innerText.trim();
-          if (!title) return;
-          
-          // Go up to find the content container
-          let contentContainer = parentNode;
-          for (let i = 0; i < 6; i++) {
-            contentContainer = contentContainer.parentElement;
-            if (!contentContainer) break;
+          if (descElement) {
+            // Look for text content in child elements
+            const textNodes = Array.from(descElement.querySelectorAll('div, span, p'))
+              .filter(el => el !== titleElement && el.innerText.trim().length > 20);
+            
+            if (textNodes.length > 0) {
+              description = textNodes[0].innerText.trim();
+              break;
+            }
           }
-          
-          // Find spans without class for content
-          const spans = contentContainer?.querySelectorAll('span:not([class])') || [];
-          let content = '';
-          
-          // Get the last span content as description
-          if (spans.length > 0) {
-            content = spans[spans.length - 1].innerText.trim();
-          } else {
-            // Fallback to other common description elements
-            const descElement = contentContainer?.querySelector('.VwiC3b') || 
-                              contentContainer?.querySelector('[data-sncf="1"]');
-            content = descElement ? descElement.innerText.trim() : '';
-          }
-          
-          // Only add if we have a title
-          if (title) {
-            searchResults.push({
-              title,
-              url: link,
-              description: content
-            });
-          }
-        } catch (error) {
-          // Skip this element if there's an error
-          console.log('Error processing element:', error);
+        }
+        
+        if (title && url) {
+          searchResults.push({
+            title,
+            url,
+            description
+          });
         }
       });
       
       return searchResults;
     });
     
-    console.log(`Found ${results.length} Google results`);
-    
     return {
-      results: results || [], // Ensure results is always an array
-      screenshot: screenshotBase64,
+      results: results || [],
+      screenshot: null, // Skip screenshot to reduce memory usage
       error: null
     };
   } catch (error) {
     console.error('Error crawling Google:', error);
-    return {
-      results: [],
-      screenshot: screenshotBase64,
-      error: error.message
-    };
+    return createMockSearchResults(query);
   } finally {
     if (browser) {
       await browser.close();
@@ -478,6 +394,12 @@ export async function crawlGoogle(query) {
  * Crawls Baidu search results for the given query
  */
 export async function crawlBaidu(query) {
+  // In Vercel environment, return mock results immediately
+  if (process.env.VERCEL) {
+    console.log('Running in Vercel environment - returning mock results for Baidu');
+    return createMockSearchResults(query);
+  }
+  
   let browser = null;
   let screenshotBase64 = null;
   
@@ -486,8 +408,8 @@ export async function crawlBaidu(query) {
     
     // Common browser options
     const browserOptions = {
-      headless: 'new',
-      args: [
+      headless: true, // Use regular headless mode instead of 'new'
+      args: chromium ? chromium.args : [
         '--no-sandbox',
         '--disable-setuid-sandbox', 
         '--disable-dev-shm-usage',
@@ -509,12 +431,12 @@ export async function crawlBaidu(query) {
         '--enable-features=NetworkService,NetworkServiceInProcess',
         '--force-color-profile=srgb',
         '--metrics-recording-only',
-        '--window-size=1280,800'
+        '--window-size=1024,768'
       ],
       ignoreHTTPSErrors: true,
       defaultViewport: {
-        width: 1280,
-        height: 800
+        width: 1024,
+        height: 768
       }
     };
     
@@ -523,116 +445,87 @@ export async function crawlBaidu(query) {
       console.log('Using serverless browser configuration');
       try {
         browserOptions.executablePath = await chromium.executablePath();
-        // In serverless environment, we need to use true headless
-        browserOptions.headless = true;
-        // Reduce memory usage for serverless
-        browserOptions.defaultViewport.width = 1024;
-        browserOptions.defaultViewport.height = 768;
       } catch (error) {
         console.log('Error configuring serverless browser:', error.message);
+        return createMockSearchResults(query);
       }
     }
     
-    browser = await puppeteer.launch(browserOptions);
+    // Attempt to launch browser
+    try {
+      browser = await puppeteer.launch(browserOptions);
+    } catch (error) {
+      console.error('Failed to launch browser:', error.message);
+      return createMockSearchResults(query);
+    }
     
-    const context = await browser.createIncognitoBrowserContext();
-    const page = await context.newPage();
-    
+    const page = await browser.newPage();
     await setupStealth(page);
     
-    // Add random delay before navigating
-    await randomDelay(1000, 3000);
-    
-    // Navigate to Baidu with the search query
+    // Navigate directly to Baidu search results
     await page.goto(`https://www.baidu.com/s?wd=${encodeURIComponent(query)}`, {
       waitUntil: 'networkidle2',
-      timeout: 30000
-    });
-
-    // Add explicit delay to let the page fully render
-    await randomDelay(2000, 4000);
-    
-    // Scroll down the page to load more results
-    await autoScroll(page);
-    
-    // Take a compressed screenshot
-    screenshotBase64 = await compressScreenshot(page, {
-      quality: 40,
-      maxWidth: 1024,
-      format: 'jpeg'
+      timeout: 15000
     });
     
-    console.log("Baidu screenshot captured (compressed image)");
-    
-    // Wait for search results to load
-    try {
-      await Promise.race([
-        page.waitForSelector('.result', { timeout: 5000 }),
-        page.waitForSelector('.c-container', { timeout: 5000 }),
-        page.waitForSelector('h3', { timeout: 5000 })
-      ]);
-    } catch (error) {
-      console.log('Baidu results selector timeout - continuing anyway');
-    }
-    
-    // Extract search results
+    // Simplified result extraction
     const results = await page.evaluate(() => {
-      console.log('Evaluating Baidu search results');
-      
       const searchResults = [];
       
-      // Use the same CSS selector as in C# code
-      const resultElements = document.querySelectorAll(".result.c-container.xpath-log, .result.c-container");
-      console.log(`Found ${resultElements.length} Baidu result elements`);
+      // Look for any h3 elements
+      const titles = document.querySelectorAll('h3');
       
-      // If no results, return empty array
-      if (resultElements.length === 0) {
-        console.log("Baidu search returned no results");
-        return searchResults;
-      }
-      
-      for (const item of resultElements) {
-        try {
-          // Try to find the title and link using the same selector as in C# code
-          const postComponent = item.querySelector("h3 > a");
-          if (!postComponent) continue;
-          
-          const title = postComponent.textContent.trim();
-          const link = postComponent.getAttribute("href");
-          
-          // Try to find the content using the same selector as in C# code
-          const spanElement = item.querySelector("span");
-          const content = spanElement ? spanElement.textContent.trim() : "";
-          
-          if (title) {
-            searchResults.push({
-              title,
-              url: link,
-              description: content
-            });
+      titles.forEach(titleElement => {
+        // Find the link
+        const linkElement = titleElement.querySelector('a');
+        if (!linkElement) return;
+        
+        const title = titleElement.innerText.trim();
+        const url = linkElement.href;
+        
+        // Find a description
+        let description = '';
+        let current = titleElement;
+        
+        // Look for next sibling with content
+        while (current = current.nextElementSibling) {
+          if (current && current.innerText && current.innerText.trim().length > 10) {
+            description = current.innerText.trim();
+            break;
           }
-        } catch (error) {
-          console.log('Error processing Baidu element:', error);
         }
-      }
+        
+        // If no description found in siblings, try parent's siblings
+        if (!description && titleElement.parentElement) {
+          let parent = titleElement.parentElement;
+          while (parent = parent.nextElementSibling) {
+            if (parent && parent.innerText && parent.innerText.trim().length > 10) {
+              description = parent.innerText.trim();
+              break;
+            }
+          }
+        }
+        
+        if (title && url) {
+          searchResults.push({
+            title,
+            url,
+            description
+          });
+        }
+      });
       
       return searchResults;
     });
     
-    console.log(`Found ${results.length} Baidu results`);
-    
     return {
-      results: results || [], // Ensure results is always an array
-      screenshot: screenshotBase64,
+      results: results || [],
+      screenshot: null, // Skip screenshot to reduce memory usage
       error: null
     };
   } catch (error) {
     console.error('Error crawling Baidu:', error);
-    return {
-      results: [],
-      screenshot: screenshotBase64,
-      error: error.message
-    };
+    return createMockSearchResults(query);
   } finally {
     if (browser) {
       await browser.close();
