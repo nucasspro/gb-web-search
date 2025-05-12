@@ -250,6 +250,55 @@ function createMockSearchResults(query) {
 }
 
 /**
+ * Get a browser executable path based on the environment
+ */
+async function getBrowserPath() {
+  // Try @sparticuz/chromium first
+  if (chromium) {
+    try {
+      return await chromium.executablePath();
+    } catch (error) {
+      console.log('Error getting chromium executable path:', error.message);
+    }
+  }
+  
+  // For local/non-Vercel development on Windows
+  const possiblePaths = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  ];
+  
+  // If we're on Windows, use a local browser
+  if (process.platform === 'win32') {
+    for (const path of possiblePaths) {
+      try {
+        const fs = require('fs');
+        if (fs.existsSync(path)) {
+          return path;
+        }
+      } catch (error) {
+        // Ignore errors
+      }
+    }
+  }
+  
+  // If on Mac
+  if (process.platform === 'darwin') {
+    return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  }
+  
+  // Linux path
+  if (process.platform === 'linux') {
+    return '/usr/bin/google-chrome';
+  }
+  
+  // Fallback - will cause an error, but we'll handle it
+  return null;
+}
+
+/**
  * Crawls Google search results for the given query
  */
 export async function crawlGoogle(query) {
@@ -259,15 +308,25 @@ export async function crawlGoogle(query) {
   try {
     console.log(`Crawling Google for: "${query}"`);
     
-    // Skip browser launch in serverless environment if we're in Vercel
+    // Always use mock results on Vercel
     if (process.env.VERCEL) {
       console.log('Running in Vercel environment - returning mock results');
       return createMockSearchResults(query);
     }
     
+    // Get browser executable path
+    const executablePath = await getBrowserPath();
+    if (!executablePath) {
+      console.log('Could not find a browser executable path');
+      return createMockSearchResults(query);
+    }
+    
+    console.log(`Using browser at: ${executablePath}`);
+    
     // Common browser options
     const browserOptions = {
-      headless: true, // Use regular headless mode instead of 'new'
+      headless: true,
+      executablePath,
       args: chromium ? chromium.args : [
         '--no-sandbox',
         '--disable-setuid-sandbox', 
@@ -394,7 +453,7 @@ export async function crawlGoogle(query) {
  * Crawls Baidu search results for the given query
  */
 export async function crawlBaidu(query) {
-  // In Vercel environment, return mock results immediately
+  // Always use mock results on Vercel
   if (process.env.VERCEL) {
     console.log('Running in Vercel environment - returning mock results for Baidu');
     return createMockSearchResults(query);
@@ -406,9 +465,19 @@ export async function crawlBaidu(query) {
   try {
     console.log(`Crawling Baidu for: "${query}"`);
     
+    // Get browser executable path
+    const executablePath = await getBrowserPath();
+    if (!executablePath) {
+      console.log('Could not find a browser executable path');
+      return createMockSearchResults(query);
+    }
+    
+    console.log(`Using browser at: ${executablePath}`);
+    
     // Common browser options
     const browserOptions = {
-      headless: true, // Use regular headless mode instead of 'new'
+      headless: true,
+      executablePath,
       args: chromium ? chromium.args : [
         '--no-sandbox',
         '--disable-setuid-sandbox', 

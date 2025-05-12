@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 module.exports = {
   reactStrictMode: true,
-  transpilePackages: ['@sparticuz/chromium'],
   webpack: (config, { isServer }) => {
     // For client-side bundles, ignore node modules that should only be used on server
     if (!isServer) {
